@@ -97,6 +97,7 @@ def process3(arr: list) -> int:
     return max(gmap[0][n-1], fmap[0][n-1])
 
 
+
 arr=[1, 100, 2]
 # arr=[1,2,100,4]
 result = process2(arr)
