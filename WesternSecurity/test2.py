@@ -17,6 +17,9 @@ p2< -5% then 下降{p3}分"
 
 """
 
+
+
+
 import mysql.connector
 
 def get_factor_value(factor_id):
