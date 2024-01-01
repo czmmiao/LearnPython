@@ -21,7 +21,33 @@ p2 =-1 then 创历史新低"
 
 """
 
+"""
 
+担任python开发专家，非常善长进行mako模板的开发。
+***仅编写mako模板***
+
+
+担任java开发专家，非常善长进行freemaker模板的开发。
+***仅编写freemaker模板***
+****特别注意，不要包含其他任何信息，不要包含示例用法***
+
+需求：
+
+1. 模板名徐遵循：{PRD_REQUEST}_{Indicator_name}_{Indicator_id1}_{Indicator_id2}的命名方式
+
+2. p_value = get_factor_value({Indicator_id}), Indicator_id可能包含多个，需逐一取值。需用实际Indicator_id的替代
+
+3. if p_value = None then return ''
+
+PRD_REQUEST	Indicator_name	indicator_id	Comment	Logic
+MarketTrendTech	CLOSE180	"p1=get_factor_value(240800000028)
+p2=get_factor_value(418200000003)"	指数.近180日买入评级的个股占比	"if p2=50 then 近180日买入评级的个股占比{p1}%，创50日新高
+if p2=-50 then 近180日买入评级的个股占比{p1}%，创50日新低
+if p2=200 then 近180日买入评级的个股占比{p1}%，创200日新高
+if p2=-200 then 近180日买入评级的个股占比{p1}%，创200日新低"
+
+
+"""
 
 
 import mysql.connector
@@ -1391,26 +1417,8 @@ def generate_market_status_text():
     # return f'VSignals市场状态显示全A处{p1_text}。中证A股指数近1周{p2_text}，成交量{p3_text}50日平均水平{p3}%。'
     return f'VSignals市场状态显示全A处{p1_text}。中证A股指数近1周{p2_text}'
 
-p3 = get_factor_value(185700000010)
 x6 = generate_market_status_text()
 print(x6)
-# print(p3)
 
 
-def MarketTrendFinance_EPS_YOY_149800000014():
-    """
-    指数.EPS(单季度)同比函数
 
-    Returns:
-    - str: 返回生成的结果字符串
-    """
-    # 获取指标值
-    p2 = get_factor_value(149800000014)
-
-    # 判断逻辑
-    if p2 == 1:
-        return '创历史新高'
-    elif p2 == -1:
-        return '创历史新低'
-    else:
-        return ''
