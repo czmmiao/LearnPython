@@ -1,0 +1,229 @@
+// strategy_portfolio= marginal_improvment(B,C,D,E,F,G,H); asset_class = `1; adjust_positioin_n_day = -1; adjust_positioin_freq_unit = 'M'; trading_day_adjust = true; adjust_pos_n_period = 1; weight_type = "equal_weight"; signal_delta_t = 0d; hold_period = 0; specifies_dates = NULL; benchmark = [`000905.SH, `000300.SH]; risk_free_indicator = "007-10_1_10_0_0"; initial_cash = 1000000; in_backtest_start_date = 1900.01.01; in_backtest_end_date = 2030.01.01; back_rehabilitation_close = true; back_rehabilitation_open = false; rehabilitation_close = false; rehabilitation_open = false; plot_backtest = false
+
+if(getFunctionViews().name.find(`backtest_broker)>=0)
+	dropFunctionView(`backtest_broker)
+go
+
+
+def backtest_broker(strategy_portfolio, asset_class = `1, adjust_positioin_n_day = -1, adjust_positioin_freq_unit = 'M', trading_day_adjust = true, adjust_pos_n_period = 1, weight_type = "signal_weight", in_factor_id = NULL, signal_delta_t = 0, hold_period = 0, back_rehabilitation_close = true, back_rehabilitation_open = false, specifies_dates = NULL, initial_cash = 1000000, in_backtest_start_date = 2014.01.01, in_backtest_end_date = 2030.01.01, rehabilitation_close = false, rehabilitation_open = false)
+  {
+    
+    /*
+    由于调仓策略不能冲突，故只能选择固定日调仓，特定日调仓，信号
+    重点参数说明
+      # asset_class: 资产类型
+        `1 : 股票
+        `2 : 指数
+
+      # adjust_positioin_n_day: 回测周期的正数/倒数第几天进行调仓
+        正数：如1， 3， 9等为回测周期的第几天
+        负数：如-1， -3， -9等为回测周期的倒数第几天
+
+      # adjust_positioin_freq_unit
+        定义回测周期
+        'Y': 年
+        'Q': 季
+        'M': 月
+        'W': 周
+
+      # trading_day_adjust: 取交易日还是自然日
+        True: 取交易日进行调仓
+        False: 取自然日进行调仓
+
+      # adjust_pos_n_period: 持有周期（配合adjust_positioin_freq_unit）使用
+        如adjust_pos_n_period = 3;adjust_positioin_freq_unit = 'M': 持有3个月
+        默认股票持有周期是1个月，指数持有周期是3个月
+
+      # weight_type: 投资组合的资产配置方式：
+        "equal_weight"： 等权分配各资产
+        "signal_weight": 根据信号产生的数量调整权重，如A出现3次，B出现2次，则A_percent = 0.6, B_percent = 0.4
+
+      # signal_delta_t: 策略信号延迟多少天后进行处理，单位为天
+
+      # hold_period: 持仓周期，单位为天
+
+      # specifies_dates: 指定日期进行调仓  
+
+    # 股票回测配置样例：
+      backtest_broker(factor_id, `1, -1, "M", true, 1)
+
+    # 指数回测配置：
+      backtest_broker(factor_id, `2, -1, "M", true, 3)
+  */
+  
+  // 确保策略的返回值是否为Matrix或者Table
+  stock_signals = strategy_portfolio
+  if (type(stock_signals) == 16) {
+   stock_signals = trans_for_doquery(stock_signals)
+  } else if (type(stock_signals) == 18) {
+   B = get_indicator_class_table(`1, stock_signals,`6)
+   stock_signals = select end_date, data_code, factor_value from B
+  } else if (type(stock_signals) == 0 and asset_class == `1 and in_factor_id != NULL) {
+    stock_signals = select end_date, data_code, factor_value from loadTable("dfs://dwm_stock_factor_class_value_day", "dwm_stock_factor_class_value_day") where factor_id = in_factor_id
+   }
+   else if (type(stock_signals) == 0 and asset_class == `2 and in_factor_id != NULL) {
+    stock_signals = select end_date, data_code, factor_value from loadTable("dfs://dwm_index_factor_class_value_day", "dwm_index_factor_class_value_day") where factor_id = in_factor_id
+   }
+  else if (type(stock_signals) != 27) {
+   throw "Please provides either IN-MEMORY TABLE, Matrix objects or factor id of stock/index class for backtesting framework."
+  }
+
+ 
+   if (asset_class == `1) {
+      // 初始化未复权价格
+     basic_asset_info = loadTable("dfs://ods_stock_quotation","ods_stock_quotation")
+     // 初始化后复权收盘价
+     if (back_rehabilitation_close == true) {
+       tmp_asset_info =  select date(end_date) as end_date, data_code, factor_value as change_pct from  get_indicator_data_table(`1,`185000000003,`6)
+       asset_info = select t1.end_date, t2.data_code, iif(t2.change_pct==NULL, t1.change_pct, t2.change_pct) as change_pct, if_trading_day, if_suspend from lj(basic_asset_info as  t1, tmp_asset_info as t2, `end_date`secu_code, `end_date`data_code)
+     }
+     // 初始化后复权开盘价
+     else if (back_rehabilitation_open == true) {
+      tmp_asset_info = select date(end_date) as end_date, data_code, factor_value as change_pct from get_indicator_data_table(`1,`185000000002,`6) context by data_code csort end_date
+      asset_info = select t1.end_date, t2.data_code, iif(t2.change_pct==NULL, t1.change_pct, t2.change_pct) as change_pct, if_trading_day, if_suspend from lj(basic_asset_info as  t1, tmp_asset_info as t2, `end_date`secu_code, `end_date`data_code)
+     }
+     // 初始化前复权价格
+     else if (rehabilitation_close == true) {
+      tmp_asset_info = select date(end_date) as end_date, data_code, percentChange(factor_value) as change_pct from get_indicator_data_table(`1,`179600000000,`6) context by data_code csort end_date
+      asset_info = select t1.end_date, t2.data_code, iif(t2.change_pct==NULL, t1.change_pct, t2.change_pct) as change_pct, if_trading_day, if_suspend from lj(basic_asset_info as  t1, tmp_asset_info as t2, `end_date`secu_code, `end_date`data_code)
+    } else {
+        // 初始化股票未复权的收益率数据
+       asset_info = select end_date, secu_code as data_code, change_pct, if_trading_day, if_suspend from basic_asset_info
+     }
+   } else if (asset_class == `2) {
+     asset_info = select end_date, data_code, change_pct, if_trading_day from loadTable("dfs://ods_index_backward","ods_index_backward")
+   }
+
+
+
+  // 检查策略持有期、周期性调仓和指定日期调仓是否指定多种调仓策略
+  if (((hold_period != 0) + (adjust_positioin_n_day != 0) + (specifies_dates != NULL))>=2) {
+   throw "There is a confict position adjustment strategy. Please ensure only one of holding period, or adjustment frequency or specified date has been assigned."
+  }
+
+   if (adjust_positioin_n_day > 0) {
+    delta_day = duration(adjust_positioin_n_day-1 + string('d'))
+   } else if (adjust_positioin_n_day < 0) {
+    delta_day = duration(adjust_positioin_n_day+1 + string('d'))
+   }
+
+ // 初始化回测的开始、结束时间
+ if (adjust_positioin_freq_unit == 'Y') {
+   backtest_start_date = temporalAdd(in_backtest_start_date, -1y)
+   backtest_end_date = temporalAdd(in_backtest_end_date, 1y)
+ } else if (adjust_positioin_freq_unit == 'Q') {
+   backtest_start_date = temporalAdd(in_backtest_start_date, -3M)
+   backtest_end_date = temporalAdd(in_backtest_end_date, 3M)
+  } else if (adjust_positioin_freq_unit == 'M') {
+    backtest_start_date = temporalAdd(in_backtest_start_date, -1M)
+    backtest_end_date = temporalAdd(in_backtest_end_date, 1M)
+  } else if (adjust_positioin_freq_unit == 'W') {
+    backtest_start_date = temporalAdd(in_backtest_start_date, -1w)
+    backtest_end_date = temporalAdd(in_backtest_end_date, 1w)
+  }
+
+  // 初始化交易日数据
+  tradingday_rowno_tab = tradingday_rowno(backtest_start_date, backtest_end_date)
+  // 初始化自然日数据
+  natureday_rowno_tab = natureday_rowno(backtest_start_date, backtest_end_date)
+
+  if (trading_day_adjust == true) {
+    adjust_day = tradingday_rowno_tab
+  } else if ( trading_day_adjust == false) {
+    adjust_day = natureday_rowno_tab
+  }
+
+  adjust_day = select end_date, rowNum, move(end_date,-signal_delta_t) as next_end_date from adjust_day
+
+  // 实现每年第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'Y' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by yearBegin(end_date) csort end_date) where first_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  } else if (adjust_positioin_freq_unit == 'Y' and adjust_positioin_n_day < 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by yearBegin(end_date) csort end_date) where last_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  }
+
+  // 实现每季度第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'Q' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by quarterBegin(end_date) csort end_date) where first_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  } else if (adjust_positioin_freq_unit == 'Q' and adjust_positioin_n_day < 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by quarterBegin(end_date) csort end_date) where last_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  }
+
+  // 实现每月第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'M' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by monthBegin(end_date) csort end_date) where first_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  } else if (adjust_positioin_freq_unit == 'M' and adjust_positioin_n_day < 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by monthBegin(end_date) csort end_date) where last_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  }
+
+  // 实现每周第N个交易日
+  if (adjust_positioin_freq_unit == 'W' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as strat_hold_date, move(end_date, -adjust_pos_n_period) as strat_adj_date from adjust_day where dayOfWeek(end_date) = min(4, adjust_positioin_n_day-1)
+  }
+
+  // 实现持有N个交易日调仓的逻辑
+
+  if (hold_period > 0) {
+   strategy_adjustment = select end_date, end_date as strat_hold_date, move(move(end_date, -hold_period), -signal_delta_t) as strat_adj_date from adjust_day order by end_date
+  }
+
+  // 实现指定自然日进行调仓的逻辑，如果指定日期为非交易日则下移至下一个交易日
+  if (specifies_dates != NULL) {
+     next_trading_day_tmp = select end_date, rowNum, move(end_date,-1) as next_end_date from adjust_day
+     next_trading_day = select * from lj(natureday_rowno_tab, next_trading_day_tmp,`last_trading_day,`end_date)
+     user_tab = table(specifies_dates)
+     strategy_adjustment = select end_date, move(iif(if_trading_day == 1, end_date, next_end_date), -signal_delta_t) as strat_adj_date from ej(next_trading_day, user_tab, `end_date) order by end_date
+  }
+
+  // 测试用数据
+  // strategy_adjustment = select end_date, monthEnd(end_date) as strat_adj_date from natureday_rowno_tab
+
+  // 为每个自然日生成调仓日期
+  strategy_adjustment = select aa.end_date, bfill(bb.strat_adj_date) as strat_adj_date, bfill(bb.strat_hold_date) as strat_hold_date from lj(natureday_rowno_tab as aa, strategy_adjustment as bb, `end_date, `end_date)
+
+  min_date=min(stock_signals.end_date)
+  // 过滤一字板、ST、北交所等特殊股票
+  if (asset_class == `1) {
+   riskstock_list=get_riskstock_list(st=true,delisting=true,suspend=true,lessthan90days=true,beijing=true)
+   stock_signals = specialstock_list_filter(stock_signals, riskstock_list)
+  }
+
+  // 处理信号延迟交易的情况
+  stock_signals = select data_code as data_code, end_date as end_date, next_end_date as signal_delay_date from ej(stock_signals, adjust_day, `end_date)
+  
+  if (weight_type == "equal_weight") {
+    day_chg = select d.end_date ,d.data_code ,d.change_pct as factor_value from asset_info as d where d.end_date >=min_date 
+    strategy_stocks_pool = select ss.end_date as end_date, ss.data_code as data_code, sa.strat_hold_date as strat_hold_date, sa.strat_adj_date as strat_adj_date from ej(stock_signals as ss, strategy_adjustment as sa, `signal_delay_date, `end_date) where ss.end_date >= backtest_start_date and ss.end_date <= backtest_end_date
+
+    if (hold_period == 0) {
+      strategy_stocks_pool = select max(end_date) as end_date, data_code, strat_hold_date, strat_adj_date from strategy_stocks_pool group by data_code, strat_hold_date, strat_adj_date
+      // 生成策略的收益率
+      result_table_debug0 = select "-1" as data_code, day_chg.end_date as end_date, avg(factor_value) as factor_value from ej(strategy_stocks_pool, day_chg, `data_code) where day_chg.end_date <= strat_adj_date and day_chg.end_date >= strat_hold_date group by day_chg.end_date
+    } else if (hold_period > 0) {
+     result_table_detail = select data_code ,day_chg.end_date  as end_date, day_chg.factor_value as factor_value from ej(strategy_stocks_pool, day_chg, `data_code) where day_chg.end_date <= strat_adj_date and day_chg.end_date >= strat_hold_date
+     result_table_detail = select end_date, data_code, factor_value from result_table_detail context by end_date, data_code, factor_value csort end_date desc limit 1
+     result_table_debug0 = select "-1" as data_code, end_date, avg(factor_value) as factor_value from result_table_detail group by end_date
+    } 
+     
+   } else if (weight_type == "signal_weight") {
+   // 获取资产的收益率
+   day_chg = select d.end_date ,d.data_code ,d.change_pct as factor_value from asset_info as d where d.end_date >=min_date and if_trading_day=1
+ 
+   // 根据生成策略的买入和卖出日期
+   strategy_stocks_pool = select ss.data_code as data_code, ss.end_date as end_date, sa.strat_hold_date as strat_hold_date, sa.strat_adj_date as strat_adj_date from ej(stock_signals as ss, strategy_adjustment as sa, `signal_delay_date, `end_date) where ss.end_date >= backtest_start_date and ss.end_date <= backtest_end_date
+   // strategy_portfolio = select * from ej(strategy_stocks_pool, day_chg, `data_code) 
+   
+   // 生成策略的收益率
+   result_table_debug0 = select "-1" as data_code, day_chg.end_date as end_date, avg(factor_value) as factor_value from ej(strategy_stocks_pool, day_chg,`data_code) where day_chg.end_date <= strat_adj_date and day_chg.end_date >=  strat_hold_date group by day_chg.end_date
+  }
+ 
+  tradingday= tradingday_rowno(min(strategy_stocks_pool.strat_hold_date),max(day_chg.end_date))
+  result_table=select nullFill(data_code,"-1") as data_code, end_date as end_date, nullFill(factor_value,0) as factor_value from  lj(tradingday,result_table_debug0,`end_date) where end_date >= backtest_start_date and end_date <= backtest_end_date
+  
+  backtest_result = exec factor_value from result_table where factor_value != NULL pivot by end_date,data_code
+  return  ::setIndexedMatrix!(backtest_result)
+  
+ }
+ 
+addFunctionView(backtest_broker)
+

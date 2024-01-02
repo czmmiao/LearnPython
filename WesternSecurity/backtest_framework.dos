@@ -1,0 +1,212 @@
+
+if(getFunctionViews().name.find(`backtest_framework)>=0)
+	dropFunctionView(`backtest_framework)
+go
+
+
+def backtest_framework(strategy_portfolio, in_strategy_id = 0, in_factor_id = NULL)
+  {
+    
+    /*
+    由于调仓策略不能冲突，故只能选择固定日调仓，特定日调仓，信号
+    重点参数说明
+      # asset_class: 资产类型
+        `1 : 股票
+        `2 : 指数
+
+      # adjust_positioin_n_day: 回测周期的正数/倒数第几天进行调仓
+        正数：如1， 3， 9等为回测周期的第几天
+        负数：如-1， -3， -9等为回测周期的倒数第几天
+
+      # adjust_positioin_freq_unit
+        定义回测周期
+        'Y': 年
+        'Q': 季
+        'M': 月
+        'W': 周
+
+      # adjust_pos_n_period: 持有周期（配合adjust_positioin_freq_unit）使用
+        如adjust_pos_n_period = 3;adjust_positioin_freq_unit = 'M': 持有3个月
+        默认股票持有周期是1个月，指数持有周期是3个月
+
+      # weight_type: 投资组合的资产配置方式：
+        "equal_weight"： 等权分配各资产
+        "signal_weight": 根据信号产生的数量调整权重，如A出现3次，B出现2次，则A_percent = 0.6, B_percent = 0.4
+
+      # signal_delta_t: 策略信号延迟多少天后进行处理，单位为天
+
+      # hold_period: 持仓周期，单位为天
+
+    # 股票回测配置样例：
+      backtest_framework(factor_id, `1, -1, "M", true, 1)
+
+    # 指数回测配置：
+      backtest_framework(factor_id, `2, -1, "M", true, 3)
+  */
+
+  t_backtest_strategy_config = load_table_from_mysql("select * from configdb.t_backtest_strategy_config where strategy_id = " + string(in_strategy_id), "configdb")
+
+  asset_class = exec asset_class[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  adjust_positioin_n_day = exec adjust_positioin_n_day[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  adjust_positioin_freq_unit = exec adjust_positioin_freq_unit[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  adjust_pos_n_period = exec adjust_pos_n_period[0] from t_backtest_strategy_config where strategy_id = in_strategy_id
+  weight_type = exec weight_type[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  signal_delta_t = exec signal_delta_t[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  hold_period = exec hold_period[0] from t_backtest_strategy_config where strategy_id = in_strategy_id
+  trading_day_adjust = exec trading_day_adjust[0] from t_backtest_strategy_config where strategy_id = in_strategy_id
+  in_backtest_start_date = exec in_backtest_start_date[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  in_backtest_end_date = exec in_backtest_end_date[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  trading_day_flag = exec trading_day_flag[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  back_rehabilitation_close = exec back_rehabilitation_close[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  back_rehabilitation_open = exec back_rehabilitation_open[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  rehabilitation_close = exec rehabilitation_close[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  rehabilitation_open = exec rehabilitation_open[0] from t_backtest_strategy_config where strategy_id = in_strategy_id 
+  
+  adjust_pos_n_period = int(adjust_pos_n_period)
+  hold_period = int(hold_period)
+
+
+  stock_signals = strategy_portfolio
+  // 确保策略的返回值是否为Matrix或者Table
+  if (in_factor_id == NULL) {
+  	stock_signals = trans_for_doquery(strategy_portfolio)
+  } else if (type(stock_signals) == 0 and asset_class == `1 and in_factor_id != NULL) {
+    stock_signals = select end_date, data_code, factor_value from loadTable("dfs://dwm_stock_factor_class_value_day", "dwm_stock_factor_class_value_day") where factor_id = in_factor_id
+   }
+   else if (type(stock_signals) == 0 and asset_class == `2 and in_factor_id != NULL) {
+    stock_signals = select end_date, data_code, factor_value from loadTable("dfs://dwm_index_factor_class_value_day", "dwm_index_factor_class_value_day") where factor_id = in_factor_id
+   }
+   
+  // 初始化未复权价格
+  basic_asset_info = loadTable("dfs://ods_stock_quotation","ods_stock_quotation")
+
+  if (asset_class == `1) {
+    // 初始化后复权价格
+    if (back_rehabilitation_close == 1) {
+      asset_info =  select date(end_date) as end_date, data_code, factor_value as change_pct from  get_indicator_data_table(`1,`185000000003,`6)
+    }      
+    // 初始化后复权开盘价
+    else if (back_rehabilitation_open == 1) {
+      asset_info = select date(end_date) as end_date, data_code, factor_value as change_pct from get_indicator_data_table(`1,`185000000002,`6)
+    } 
+    // 初始化前复权价格
+    else if (rehabilitation_close == 1) {
+      asset_info = select date(end_date) as end_date, data_code, percentChange(factor_value) as change_pct from get_indicator_data_table(`1,`179600000000,`6) context by data_code csort end_date
+      }
+  } else if (asset_class == `2) {
+    asset_info = select end_date, data_code, change_pct from loadTable("dfs://ods_index_backward","ods_index_backward")
+  } else 
+    // 初始化股票未复权的收益率数据
+  {
+    asset_info = select end_date, secu_code as data_code, change_pct from basic_asset_info
+  }
+ 
+  if (adjust_positioin_n_day > 0) {
+    delta_day = duration(adjust_positioin_n_day-1 + string('d'))
+   } else if (adjust_positioin_n_day < 0) {
+    delta_day = duration(adjust_positioin_n_day+1 + string('d'))
+   } 
+ 
+ // 初始化回测的开始、结束时间
+  if (adjust_positioin_freq_unit == 'Q') {
+   backtest_start_date = temporalAdd(date(in_backtest_start_date), -3M)
+   backtest_end_date = temporalAdd(date(in_backtest_end_date), 3M)
+  } else if (adjust_positioin_freq_unit == 'M') {
+    backtest_start_date = temporalAdd(date(in_backtest_start_date), -1M)
+    backtest_end_date = temporalAdd(date(in_backtest_end_date), 1M)
+  } else if (adjust_positioin_freq_unit == 'W') {
+    backtest_start_date = temporalAdd(date(in_backtest_start_date), -1w)
+    backtest_end_date = temporalAdd(date(in_backtest_end_date), 1w)
+  }
+    
+  // 初始化交易日数据
+  
+  if (trading_day_flag == 1) {
+    adjust_day = tradingday_rowno(backtest_start_date, backtest_end_date)
+  } else if ( trading_day_flag == 0) {
+    adjust_day = natureday_rowno(backtest_start_date, backtest_end_date)
+  }
+
+  adjust_day = select end_date, rowNum, move(end_date,-signal_delta_t) as next_end_date from adjust_day
+ 
+  // 实现每季度第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'Q' and adjust_positioin_n_day < 0) {
+   strategy_adjustment = select end_date as end_date, end_date as buy_date, move(end_date, -adjust_pos_n_period) as sell_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by quarterBegin(end_date) csort end_date) where last_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  } else if (adjust_positioin_freq_unit == 'Q' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as buy_date, move(end_date, -adjust_pos_n_period) as sell_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by quarterBegin(end_date) csort end_date) where first_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  }
+ 
+  // 实现每月第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'M' and adjust_positioin_n_day < 0) {
+   strategy_adjustment = select end_date as end_date, end_date as buy_date, move(end_date, -adjust_pos_n_period) as sell_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by monthBegin(end_date) csort end_date) where last_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  } else if (adjust_positioin_freq_unit == 'M' and adjust_positioin_n_day > 0) {
+   strategy_adjustment = select end_date as end_date, end_date as buy_date, move(end_date, -adjust_pos_n_period) as sell_date from (select end_date ,rowNum, last(rowNum) - rowNum as last_offset ,rowNum - first(rowNum) as first_offset , last(rowNum) as last_d, first(rowNum) as first_d from adjust_day context by monthBegin(end_date) csort end_date) where first_offset = min(last_d - first_d, abs(adjust_positioin_n_day)-1)
+  }
+
+  
+  // 实现每周第N个交易日和倒数第N个交易日调仓的逻辑
+  if (adjust_positioin_freq_unit == 'W' and adjust_positioin_n_day > 0) {
+    strategy_adjustment = select end_date as end_date, end_date as buy_date, move(end_date, -adjust_pos_n_period) as sell_date from adjust_day where dayOfWeek(end_date) = min(4, adjust_positioin_n_day-1)
+  }
+
+  // 实现持有N个交易日调仓的逻辑
+  if (hold_period > 0 and signal_delta_t > 0) {
+    strategy_adjustment = select end_date, move(end_date, -signal_delta_t) as buy_date, move(move(end_date, -hold_period), -signal_delta_t) as sell_date from adjust_day order by end_date
+   }
+
+  
+  if (hold_period > 0 and signal_delta_t < 0) {
+  strategy_adjustment = select end_date, move(end_date, -signal_delta_t) as buy_date, move(end_date, -hold_period) as sell_date from adjust_day order by end_date
+  }
+ 
+  min_date=min(stock_signals.end_date)
+  // 过滤一字板、ST、北交所、不满三个月、停牌等特殊股票
+  if (asset_class == `1) {
+   riskstock_list=get_riskstock_list(st=true,delisting=true,suspend=true,lessthan90days=true,beijing=true)
+   stock_signals = specialstock_list_filter(stock_signals, riskstock_list)
+  }
+ 
+  // 处理信号延迟交易的情况
+  stock_signals = select data_code as data_code, end_date as end_date, next_end_date as signal_delay_date from ej(stock_signals, adjust_day, `end_date)
+  
+  // 创建基于data_code的内存hash分区表，以提升join速度
+  db=database("", HASH,  [STRING, 40])
+  day_chg_tb=table(1000:0, `end_date`data_code`factor_value, [DATE, STRING, DOUBLE])
+  day_chg_tb=db.createPartitionedTable(day_chg_tb,`day_chg_tb, `data_code)
+  
+  strategy_stocks_pool_tb=table(1000:0, `end_date`data_code`buy_date`sell_date, [DATE, STRING, DATE, DATE])
+  strategy_stocks_pool_tb=db.createPartitionedTable(strategy_stocks_pool_tb,`strategy_stocks_pool_tb, `data_code)
+
+  // 获取资产的收益率
+  day_chg = select d.end_date ,d.data_code ,d.change_pct as factor_value from asset_info as d where d.end_date >=min_date 
+  day_chg_tb.append!(day_chg)
+
+  // 根据生成策略的买入和卖出日期
+  strategy_stocks_pool = select ss.end_date as end_date, ss.data_code as data_code, sa.buy_date as buy_date, sa.sell_date as sell_date from ej(stock_signals as ss, strategy_adjustment as sa, `signal_delay_date, `buy_date) where ss.end_date >= backtest_start_date and ss.end_date <= backtest_end_date
+  strategy_stocks_pool_tb.append!(strategy_stocks_pool)
+
+  if (weight_type == "equal_weight") {      
+   if (hold_period == 0) {
+    strategy_stocks_pool_tb = select max(end_date) as end_date, data_code, buy_date, sell_date from strategy_stocks_pool_tb group by data_code, buy_date, sell_date
+    // 生成策略的收益率
+    result_table_debug0 = select "-1" as data_code, day_chg.end_date as end_date, avg(factor_value) as factor_value from ej(strategy_stocks_pool_tb, day_chg_tb as day_chg, `data_code) where day_chg.end_date <= sell_date and day_chg.end_date >= buy_date group by day_chg.end_date
+   } else if (hold_period > 0) {
+    result_table_detail = select data_code ,day_chg.end_date  as end_date, day_chg.factor_value as factor_value from ej(strategy_stocks_pool_tb, day_chg_tb as day_chg, `data_code) where day_chg.end_date <= sell_date and day_chg.end_date >= buy_date
+    result_table_detail = select end_date, data_code, factor_value from result_table_detail context by end_date, data_code, factor_value csort end_date desc limit 1
+    result_table_debug0 = select "-1" as data_code, end_date, avg(factor_value) as factor_value from result_table_detail group by end_date
+   } 
+    
+  } else if (weight_type == "signal_weight") {
+   // 生成策略的收益率
+   result_table_debug0 = select "-1" as data_code, day_chg.end_date as end_date, avg(factor_value) as factor_value from ej(strategy_stocks_pool_tb, day_chg_tb as day_chg,`data_code) where day_chg.end_date <= sell_date and day_chg.end_date >=  buy_date group by day_chg.end_date
+  }
+ 
+  tradingday= tradingday_rowno(min(strategy_stocks_pool.buy_date),max(day_chg.end_date))
+  result_table=select nullFill(data_code,"-1") as data_code, end_date as end_date, nullFill(factor_value,0) as factor_value from  lj(tradingday,result_table_debug0,`end_date) where end_date >= backtest_start_date and end_date <= backtest_end_date
+  
+  backtest_result = exec factor_value from result_table where factor_value != NULL pivot by end_date,data_code
+  return  ::setIndexedMatrix!(backtest_result)
+  
+ }
+ 
+addFunctionView(backtest_framework)
