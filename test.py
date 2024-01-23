@@ -1,33 +1,32 @@
-class Solution:
-    def process(self, nums, idx, pick, rest):
-        if idx == len(nums):  # 没数了！！
-            return 0 if pick == 0 else -1
-        else:  # 还有数
-            p1 = self.process(nums, idx + 1, pick, rest)  # 不要这个数
-            p2 = -1
-            if rest >= nums[idx]:  # 可以要这个数
-                next_result = self.process(nums, idx + 1, pick - 1, rest - nums[idx])
-                if next_result != -1:
-                    p2 = nums[idx] + next_result
-            return max(p1, p2)
+def process2(self, idx: int, s: str, dp: List) -> int:
+    if idx == len(s):
+        return 1
 
-    def SplitSumClosedSizeHalf(self, nums):
-        N = len(nums)
-        if N < 2:
-            return 0
+    if s[idx] == '0':
+        return 0
 
-        arr_sum = sum(nums)
-        target_sum = arr_sum // 2
+    if dp[idx] != -1:
+        return dp[idx]
 
-        if N % 2 == 0:
-            return self.process(nums, 0, N // 2, target_sum)
-        else:
-            p1 = self.process(nums, 0, N // 2, target_sum)
-            p2 = self.process(nums, 0, (N + 1) // 2, target_sum)
-            return max(p1, p2)
+    if s[idx] == '*':
+        ans = self.process2(idx + 1, s) * 9
+    else:
+        ans = self.process2(idx + 1, s)
 
-# 示例调用
-nums_example = [1, 2, 3, 4, 5]
-solution = Solution()
-result_example = solution.SplitSumClosedSizeHalf(nums_example)
-print(result_example)
+    if idx + 1 < len(s):
+        if s[idx] != "*" and s[idx + 1] != "*":
+            if int(s[idx:idx + 2]) >= 10 and int(s[idx:idx + 2]) <= 26:
+                ans += self.process2(idx + 2, s)
+        elif s[idx] == "1" and s[idx + 1] == "*":
+            ans += self.process2(idx + 2, s) * 9
+        elif s[idx] == "2" and s[idx + 1] == "*":
+            ans += self.process2(idx + 2, s) * 6
+        elif s[idx] == "*" and s[idx + 1] > '6':
+            ans += self.process2(idx + 2, s)
+        elif s[idx] == "*" and s[idx + 1] <= '6':
+            ans += self.process2(idx + 2, s) * 2
+        elif s[idx] == "*" and s[idx + 1] == "*":
+            ans += self.process2(idx + 2, s) * 15
+
+    dp[idx] = ans
+    return ans

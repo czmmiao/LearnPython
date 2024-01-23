@@ -89,7 +89,6 @@ class Solution():
             return ans
 
 
-
 S = Solution()
 print(S.multiply(4000000000,500000))
 print(S.minus(40000000000000000,500000))
