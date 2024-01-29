@@ -1,3 +1,5 @@
+from typing import List
+
 def process2(self, idx: int, s: str, dp: List) -> int:
     if idx == len(s):
         return 1

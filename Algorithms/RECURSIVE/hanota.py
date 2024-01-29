@@ -178,3 +178,31 @@ A = [0]
 B = []
 C = []
 print(S.hanota(A, B, C))
+
+
+
+class Solution1:
+    def hanota(self, A: List[int], B: List[int], C: List[int]) -> None:
+        """
+        Do not return anything, modify C in-place instead.
+        """
+        n = len(A)
+        return self.process(n, A, B, C)
+
+    def process(self, n: int, A: List[int], B: List[int], C: List[int]) -> List:
+        if n == 1:
+            C.append(A[-1])
+            A.pop()
+            return C
+
+        self.process(n - 1, A, C, B)
+        print(f"移动{n-1}个圆盘到借力柱")
+        C.append(A[-1])
+        print(f"移动{A[-1]}号圆盘到目标柱")
+        A.pop()
+        self.process(n - 1, B, A, C)
+        print(f"从借力柱移动{n-1}个原盘到目标柱")
+
+SS = Solution1()
+SS.hanota([5,4,3,2,1,0], [], [])
+
